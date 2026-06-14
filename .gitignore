@@ -1,0 +1,18 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.streamlit/secrets.toml
+
+# Local data and model artifacts can be large or private.
+data/
+weights/*.pt
+weights/*.pth
+weights/*.safetensors
+outputs/
+
+.env
+.DS_Store

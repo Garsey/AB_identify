@@ -19,8 +19,16 @@ from field_parser import (
 
 
 DEFAULT_MANIFEST_PATH = Path("training-data/cola-sample-pack-v1/manifest.jsonl")
-PHRASE_FIELDS = ["brand_name", "product_name", "class_name"]
-EVAL_FIELDS = ["brand_name", "product_name", "product_type", "class_name", "abv", "volume", "barcode_value"]
+PHRASE_FIELDS = ["brand_name", "class_name", "product_type"]
+EVAL_FIELDS = [
+    "brand_name",
+    "class_type_designation",
+    "alcohol_content",
+    "net_contents",
+    "bottler_producer_address",
+    "country_of_origin",
+    "government_warning",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +61,7 @@ def evaluate(model: dict[str, Any], records: list[dict[str, Any]], min_confidenc
         labels = record.get("labels", {})
         predictions = {item.field: item for item in parse_label_text(model, record.get("ocr_text", ""), min_confidence)}
         for field in EVAL_FIELDS:
-            actual = str(labels.get(field, "")).strip()
+            actual = get_actual_field_value(field, labels, record.get("ocr_text", ""))
             if not actual:
                 continue
             totals[field] += 1
@@ -68,7 +76,11 @@ def evaluate(model: dict[str, Any], records: list[dict[str, Any]], min_confidenc
                 {
                     "image_id": record.get("image_id", ""),
                     "predicted": {field: prediction.value for field, prediction in predictions.items()},
-                    "actual": {field: labels.get(field, "") for field in EVAL_FIELDS if labels.get(field, "")},
+                    "actual": {
+                        field: get_actual_field_value(field, labels, record.get("ocr_text", ""))
+                        for field in EVAL_FIELDS
+                        if get_actual_field_value(field, labels, record.get("ocr_text", ""))
+                    },
                 }
             )
 
@@ -82,6 +94,26 @@ def evaluate(model: dict[str, Any], records: list[dict[str, Any]], min_confidenc
             "precision": round(correct[field] / predicted[field], 4) if predicted[field] else 0.0,
         }
     return {"records": len(records), "fields": field_metrics, "examples": examples}
+
+
+def get_actual_field_value(field: str, labels: dict[str, Any], ocr_text: str) -> str:
+    if field == "brand_name":
+        return str(labels.get("brand_name", "")).strip()
+    if field == "class_type_designation":
+        return str(labels.get("class_name") or labels.get("product_type") or "").strip()
+    if field == "alcohol_content":
+        return str(labels.get("abv", "")).strip()
+    if field == "net_contents":
+        volume = str(labels.get("volume", "")).strip()
+        unit = str(labels.get("volume_unit", "")).strip()
+        return " ".join(part for part in [volume, unit] if part)
+    if field == "bottler_producer_address":
+        return str(labels.get("bottler_producer_address", "")).strip()
+    if field == "country_of_origin":
+        return str(labels.get("country_of_origin", "")).strip()
+    if field == "government_warning":
+        return "Present" if "government warning" in (ocr_text or "").lower() else ""
+    return str(labels.get(field, "")).strip()
 
 
 def main() -> None:

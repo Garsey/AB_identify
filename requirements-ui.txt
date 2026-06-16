@@ -1,4 +1,5 @@
 streamlit>=1.36
+pandas>=2.2
 pillow>=10.0
 rapidfuzz>=3.9
 pytesseract>=0.3.13

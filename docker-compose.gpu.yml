@@ -1,0 +1,6 @@
+services:
+  web-app:
+    gpus: all
+    environment:
+      - OCR_BACKEND=easyocr
+      - OCR_DEVICE=cuda

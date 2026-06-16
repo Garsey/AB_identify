@@ -13,13 +13,23 @@ MODEL_VERSION = 1
 DEFAULT_MODEL_PATH = Path("weights/cola_field_parser.json")
 FIELD_ORDER = [
     "brand_name",
-    "product_name",
-    "product_type",
-    "class_name",
-    "abv",
-    "volume",
-    "barcode_value",
+    "class_type_designation",
+    "alcohol_content",
+    "net_contents",
+    "bottler_producer_address",
+    "country_of_origin",
+    "government_warning",
 ]
+
+FIELD_LABELS = {
+    "brand_name": "Brand name",
+    "class_type_designation": "Class/type designation",
+    "alcohol_content": "Alcohol content",
+    "net_contents": "Net contents",
+    "bottler_producer_address": "Name and address of bottler/producer",
+    "country_of_origin": "Country of origin for imports",
+    "government_warning": "Government Health Warning Statement",
+}
 
 
 @dataclass(frozen=True)
@@ -80,8 +90,19 @@ def text_to_rows(text: str, chunk_size: int = 220) -> list[dict[str, str | int]]
 
 def labels_to_rows(labels: dict[str, str]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for key in FIELD_ORDER + ["volume_unit", "barcode_type"]:
+    legacy_map = {
+        "brand_name": labels.get("brand_name", ""),
+        "class_type_designation": labels.get("class_name") or labels.get("product_type", ""),
+        "alcohol_content": labels.get("abv", ""),
+        "net_contents": " ".join(part for part in [labels.get("volume", ""), labels.get("volume_unit", "")] if part),
+        "bottler_producer_address": labels.get("bottler_producer_address", ""),
+        "country_of_origin": labels.get("country_of_origin", ""),
+        "government_warning": labels.get("government_warning", ""),
+    }
+    for key in FIELD_ORDER:
         value = labels.get(key, "")
+        if not value:
+            value = legacy_map.get(key, "")
         if value:
             rows.append({"field": display_field(key), "value": str(value)})
     return rows
@@ -100,7 +121,7 @@ def predictions_to_rows(predictions: list[FieldPrediction]) -> list[dict[str, st
 
 
 def display_field(field: str) -> str:
-    return field.replace("_", " ").title().replace("Abv", "ABV")
+    return FIELD_LABELS.get(field, field.replace("_", " ").title().replace("Abv", "ABV"))
 
 
 def build_phrase_index(records: list[dict[str, Any]], fields: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -163,14 +184,14 @@ def parse_label_text(model: dict[str, Any], text: str, min_confidence: float = 0
     predictions: list[FieldPrediction] = []
     text_norm = normalize_text(text)
 
-    for field in ["brand_name", "product_name"]:
+    for field in ["brand_name"]:
         match = best_phrase_match(field, model.get("phrase_index", {}).get(field, []), text_norm)
         if match and match.confidence >= min_confidence:
             predictions.append(match_for_field(field, match))
 
-    product_type = parse_product_type(text_norm)
-    if product_type and product_type.confidence >= min_confidence:
-        predictions.append(product_type)
+    class_type = parse_class_type_designation(model, text_norm)
+    if class_type and class_type.confidence >= min_confidence and not has_prediction(predictions, "class_type_designation"):
+        predictions.append(class_type)
 
     abv = parse_abv(text)
     if abv and abv.confidence >= min_confidence:
@@ -180,11 +201,23 @@ def parse_label_text(model: dict[str, Any], text: str, min_confidence: float = 0
     if volume and volume.confidence >= min_confidence:
         predictions.append(volume)
 
-    barcode = parse_barcode(text)
-    if barcode and barcode.confidence >= min_confidence:
-        predictions.append(barcode)
+    bottler = parse_bottler_producer_address(text)
+    if bottler and bottler.confidence >= min_confidence:
+        predictions.append(bottler)
+
+    origin = parse_country_of_origin(text, model)
+    if origin and origin.confidence >= min_confidence:
+        predictions.append(origin)
+
+    warning = parse_government_warning(text)
+    if warning and warning.confidence >= min_confidence:
+        predictions.append(warning)
 
     return sorted(predictions, key=lambda item: FIELD_ORDER.index(item.field) if item.field in FIELD_ORDER else 999)
+
+
+def has_prediction(predictions: list[FieldPrediction], field: str) -> bool:
+    return any(prediction.field == field for prediction in predictions)
 
 
 @dataclass(frozen=True)
@@ -229,8 +262,16 @@ def parse_product_type(text_norm: str) -> FieldPrediction | None:
         hits = sum(1 for keyword in keywords if re.search(rf"\b{re.escape(keyword)}\b", text_norm))
         if hits:
             confidence = min(0.95, 0.72 + hits * 0.08)
-            return FieldPrediction("product_type", value, confidence, "alcohol category keyword")
+            return FieldPrediction("class_type_designation", value, confidence, "alcohol category keyword")
     return None
+
+
+def parse_class_type_designation(model: dict[str, Any], text_norm: str) -> FieldPrediction | None:
+    for field in ["class_name", "product_type"]:
+        match = best_phrase_match(field, model.get("phrase_index", {}).get(field, []), text_norm)
+        if match:
+            return FieldPrediction("class_type_designation", match.value, match.confidence, match.source)
+    return parse_product_type(text_norm)
 
 
 def parse_abv(text: str) -> FieldPrediction | None:
@@ -251,7 +292,7 @@ def parse_abv(text: str) -> FieldPrediction | None:
     if not candidates:
         return None
     confidence, value = max(candidates, key=lambda item: item[0])
-    return FieldPrediction("abv", value, confidence, "ABV regex")
+    return FieldPrediction("alcohol_content", value, confidence, "ABV regex")
 
 
 def parse_volume(text: str) -> FieldPrediction | None:
@@ -278,7 +319,7 @@ def parse_volume(text: str) -> FieldPrediction | None:
     if not candidates:
         return None
     confidence, value = max(candidates, key=lambda item: item[0])
-    return FieldPrediction("volume", value, confidence, "volume regex")
+    return FieldPrediction("net_contents", value, confidence, "volume regex")
 
 
 def parse_barcode(text: str) -> FieldPrediction | None:
@@ -289,10 +330,66 @@ def parse_barcode(text: str) -> FieldPrediction | None:
     return None
 
 
+def parse_bottler_producer_address(text: str) -> FieldPrediction | None:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if not compact:
+        return None
+    patterns = [
+        r"((?:produced|bottled|vinted|cellared|distilled|brewed|imported|selected)\s+(?:and\s+)?(?:bottled|produced|vinted|cellared|distilled|brewed|imported)?\s*(?:by|for)\s*[:\-]?\s*.{12,150})",
+        r"((?:estate\s+bottled|grown\s+and\s+bottled)\s+.{12,150})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            value = trim_at_compliance_boundary(match.group(1))
+            return FieldPrediction("bottler_producer_address", value, 0.88, "producer/address phrase")
+    return None
+
+
+def trim_at_compliance_boundary(value: str) -> str:
+    boundaries = [
+        " government warning",
+        " contains sulfites",
+        " alc ",
+        " alcohol ",
+        " www.",
+        " http",
+    ]
+    lowered = value.lower()
+    end = len(value)
+    for boundary in boundaries:
+        index = lowered.find(boundary)
+        if index > 20:
+            end = min(end, index)
+    return value[:end].strip(" .,;:-")
+
+
+def parse_country_of_origin(text: str, model: dict[str, Any] | None = None) -> FieldPrediction | None:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    patterns = [
+        r"(?:product|produce)\s+of\s+([A-Z][A-Za-z .'-]{3,40})",
+        r"imported\s+from\s+([A-Z][A-Za-z .'-]{3,40})",
+        r"([A-Z][A-Za-z .'-]{3,40})\s+(?:wine|whisky|whiskey|vodka|gin|rum|tequila|liqueur)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            value = trim_at_compliance_boundary(match.group(1))
+            if 3 <= len(value) <= 45:
+                return FieldPrediction("country_of_origin", value.title(), 0.84, "origin phrase")
+    return None
+
+
+def parse_government_warning(text: str) -> FieldPrediction | None:
+    if re.search(r"\bgovernment\s+war(?:n|r)?ing\b", text or "", flags=re.IGNORECASE):
+        return FieldPrediction("government_warning", "Present", 0.99, "government warning phrase")
+    return None
+
+
 def compare_prediction(field: str, predicted: str, actual: str) -> bool:
     if not predicted or not actual:
         return False
-    if field in {"abv", "volume"}:
+    if field in {"alcohol_content", "net_contents", "abv", "volume"}:
         pred_num = first_number(predicted)
         actual_num = first_number(actual)
         return pred_num is not None and actual_num is not None and math.isclose(pred_num, actual_num, rel_tol=0.02, abs_tol=0.05)

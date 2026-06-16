@@ -19,7 +19,7 @@ from field_parser import (
 
 
 DEFAULT_MANIFEST_PATH = Path("training-data/cola-sample-pack-v1/manifest.jsonl")
-PHRASE_FIELDS = ["brand_name", "class_name", "product_type"]
+PHRASE_FIELDS = ["brand_name", "class_name", "product_type", "country_of_origin"]
 EVAL_FIELDS = [
     "brand_name",
     "class_type_designation",
@@ -112,7 +112,9 @@ def get_actual_field_value(field: str, labels: dict[str, Any], ocr_text: str) ->
     if field == "country_of_origin":
         return str(labels.get("country_of_origin", "")).strip()
     if field == "government_warning":
-        return "Present" if "government warning" in (ocr_text or "").lower() else ""
+        from field_parser import has_government_warning
+
+        return "Present" if has_government_warning(ocr_text) else ""
     return str(labels.get(field, "")).strip()
 
 

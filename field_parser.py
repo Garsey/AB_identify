@@ -365,10 +365,21 @@ def trim_at_compliance_boundary(value: str) -> str:
 
 
 def parse_country_of_origin(text: str, model: dict[str, Any] | None = None) -> FieldPrediction | None:
+    text_norm = normalize_text(text)
+    if model:
+        match = best_phrase_match("country_of_origin", model.get("phrase_index", {}).get("country_of_origin", []), text_norm)
+        if match and match.confidence >= 0.82:
+            return FieldPrediction("country_of_origin", match.value.title(), min(0.95, match.confidence), "trained country phrase")
+
     compact = re.sub(r"\s+", " ", text or "").strip()
+    country = find_country_name(text_norm)
+    if country:
+        return FieldPrediction("country_of_origin", country, 0.88, "country name match")
+
     patterns = [
         r"(?:product|produce)\s+of\s+([A-Z][A-Za-z .'-]{3,40})",
         r"imported\s+from\s+([A-Z][A-Za-z .'-]{3,40})",
+        r"imported\s+by\s+.{0,80}?\bfrom\s+([A-Z][A-Za-z .'-]{3,40})",
         r"([A-Z][A-Za-z .'-]{3,40})\s+(?:wine|whisky|whiskey|vodka|gin|rum|tequila|liqueur)",
     ]
     for pattern in patterns:
@@ -381,8 +392,57 @@ def parse_country_of_origin(text: str, model: dict[str, Any] | None = None) -> F
 
 
 def parse_government_warning(text: str) -> FieldPrediction | None:
-    if re.search(r"\bgovernment\s+war(?:n|r)?ing\b", text or "", flags=re.IGNORECASE):
-        return FieldPrediction("government_warning", "Present", 0.99, "government warning phrase")
+    if has_government_warning(text):
+        return FieldPrediction("government_warning", "Present", 0.99, "government warning presence check")
+    return None
+
+
+def has_government_warning(text: str) -> bool:
+    tokens = re.findall(r"[a-zA-Z]+", text or "")
+    normalized = [token.lower().replace("0", "o").replace("1", "l") for token in tokens]
+    compact = " ".join(normalized)
+    if re.search(r"\bgovernment\s+war(?:n|r)?ing\b", compact, flags=re.IGNORECASE):
+        return True
+    for index, token in enumerate(normalized):
+        if fuzzy_score("government", token) < 0.82:
+            continue
+        window = normalized[index + 1 : index + 7]
+        if any(fuzzy_score("warning", candidate) >= 0.78 or fuzzy_score("waring", candidate) >= 0.82 for candidate in window):
+            return True
+    return False
+
+
+COUNTRY_NAMES = {
+    "argentina",
+    "australia",
+    "austria",
+    "belgium",
+    "brazil",
+    "canada",
+    "chile",
+    "china",
+    "france",
+    "germany",
+    "greece",
+    "ireland",
+    "israel",
+    "italy",
+    "japan",
+    "mexico",
+    "netherlands",
+    "new zealand",
+    "portugal",
+    "south africa",
+    "spain",
+    "switzerland",
+    "united kingdom",
+}
+
+
+def find_country_name(text_norm: str) -> str | None:
+    for country in sorted(COUNTRY_NAMES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(country)}\b", text_norm):
+            return country.title()
     return None
 
 

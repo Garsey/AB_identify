@@ -1,16 +1,46 @@
 # AB Identify
 
-Lightweight local prototype for reading alcohol label images, filling an editable seven-field table, and saving entries during the current app session.
+AB Identify is webapp tool for reading alcohol label photos and building an alcohol compliance table. Users upload one label image at a time; OCR reads the visible text, the field parser fills high-confidence values, and the user can edit or delete fields in the entry before saving it to an in-memory table.
 
-The project uses the standard training/deployment split:
+## Docker Guide: CUDA
 
-1. Materialize labeled COLA sample data locally.
-2. Train/export a parser artifact from OCR text and CSV ground truth.
-3. Build Docker as an inference-only web app that reads new uploads with pretrained OCR, fills only confident values, and lets users edit/save the final table entry.
-
-## Local Setup
+Use this path when running on a machine with NVIDIA GPU support configured for Docker Desktop.
 
 ```powershell
+cd C:\ab_proj\AB_identify
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+Then open http://localhost:8501.
+
+The GPU compose override exposes all NVIDIA GPUs to the container and requests:
+
+```text
+OCR_BACKEND=easyocr
+OCR_DEVICE=cuda
+```
+
+The app still checks PyTorch CUDA availability at runtime. If CUDA is not visible inside the container, OCR falls back according to the configured backend behavior.
+
+## Docker Guide: CPU
+
+Use this path for cpu only compatibility.
+
+```powershell
+cd C:\ab_proj\AB_identify
+docker compose up --build
+```
+
+Then open http://localhost:8501.
+
+The CPU build runs the same web app and parser artifact, but OCR inference will be antiquated due to cpu inference.
+
+## Python Guide
+
+For local development without Docker:
+
+```powershell
+cd C:\ab_proj\AB_identify
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -18,70 +48,28 @@ pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-Then open http://localhost:8501.
-
-## Docker Setup
-
-```powershell
-docker compose up --build
-```
-
-Then open http://localhost:8501.
-
-The Docker image is inference-only. It installs Tesseract OCR plus the lightweight Python UI/parser dependencies, includes `weights/cola_field_parser.json`, and does not mount the full repo or training data at runtime.
-
-For CPU inference:
-
-```powershell
-docker compose up --build
-```
-
-For NVIDIA/CUDA inference, make sure Docker Desktop has NVIDIA Container Toolkit support enabled, then run:
-
-```powershell
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
-```
-
-The app requests CUDA in that mode, but the OCR code still checks PyTorch CUDA availability before using it.
-
-## Project Layout
-
-- `app.py` - Streamlit upload UI that OCRs a new image and fills the parsed table.
-- `ocr_engine.py` - pretrained OCR backend selection. EasyOCR is preferred, with Tesseract fallback.
-- `field_parser.py` - trained OCR-text field parser and confidence filtering.
-- `train.py` - trains the parser from the local manifest using a 90/10 split.
-- `materialize_cola_sample.py` - downloads sample-pack image files and creates a training manifest.
-- `weights/cola_field_parser.json` - exported parser artifact used by Docker.
-
-## Training Flow
-
-Download/materialize the sample-pack images first:
+Training data is materialized separately from colacloud.us and is not required for normal inference if `weights/cola_field_parser.json` is present.
 
 ```powershell
 python materialize_cola_sample.py
+python train.py --train-ratio 0.9 --min-confidence 0.85
 ```
 
-Train a 90/10 split parser:
+## App Layers
 
-```powershell
-python train.py --train-ratio 0.9 --seed 42 --min-confidence 0.85
-```
-
-This writes:
+The app uses two AI layers rather than one monolithic model.
 
 ```text
-weights/cola_field_parser.json
+label image -> pretrained OCR -> OCR text -> trained field parser -> editable table
 ```
 
-Commit or package this exported artifact before building Docker. Training happens once in the development environment; Docker only loads the exported parser and serves inference.
+**OCR layer:** EasyOCR is the preferred pretrained OCR backend, with Tesseract available as a fallback. A pretrained OCR is used due to time constraints.
 
-## Current Model Behavior
+**Field parser layer:** `weights/cola_field_parser.json` is trained from COLA Cloud's OCR text dataset. It parses the OCR text from the current upload and fills only values that clear the confidence rules.
 
-The current app does not match uploads to training images. It reads text from each uploaded image with OCR, then fills fields only when the parser is confident. If OCR text is jumbled and only ABV or brand is clear, only those fields should appear. The raw OCR text and uploaded image remain visible so the user can manually inspect anything the parser leaves blank.
+## Parsed Fields
 
-Users can upload multiple photos for the same product one at a time. Values already captured stay in the editable form while the next photo is processed. `Save entry` appends all seven values to an in-memory pandas table, which is intentionally cleared when the app reinitializes.
-
-The seven tracked fields are:
+The app tracks seven fields:
 
 - Brand name
 - Class/type designation
@@ -91,8 +79,37 @@ The seven tracked fields are:
 - Country of origin for imports
 - Government Health Warning Statement
 
-## OCR Design Decision
+Users can upload multiple photos for the same product one at a time. Newly parsed values fill only blank fields, so prior OCR results and user edits stick until `Save entry`. Saved entries are stored in an in-memory pandas table and are cleared when the app reinitializes.
 
-The project intentionally uses a pretrained OCR model rather than training our own OCR from scratch. EasyOCR is the preferred OCR backend because it is stronger than plain Tesseract for scene text and can evaluate rotated text, which helps with vertical label copy and alternate fonts. Tesseract remains available as a fallback.
+'Government warning' is treated as a presence check. The parser stores `Present` when OCR contains tolerant variants of "Government Warning"
 
-Our exported training artifact currently improves the second layer: OCR text to structured alcohol-label fields. The current data does not include word-level bounding boxes, so it is not yet suitable for clean supervised OCR detector/recognizer fine-tuning. If we later add text-region annotations, we can fine-tune a pretrained OCR model while keeping the field parser layer.
+Country of origin is trained from imported COLA records using `ORIGIN_NAME` and also checked against recognized country names in OCR text.
+
+```markdown
+![AB_Identify web app](docs/ab_proj.jpg)
+```
+
+## Assumptions
+
+- The Docker image is inference-first. Training should happen before Docker deployment, and the exported parser artifact should be present at `weights/cola_field_parser.json`.
+- The current project uses pretrained OCR rather than training a custom OCR detector/recognizer from scratch.
+- The available training data includes full label images, OCR text, and COLA-level structured fields, but not labeled bounding boxes for OCR training.
+- Parser confidence is intentionally conservative. Blank fields are preferred over low-confidence guesses.
+- The saved-entry table is temporary by design and resets when the app process restarts.
+
+## Tools And Data
+
+- Streamlit: web UI
+- pandas: in-memory saved-entry table
+- EasyOCR: primary pretrained OCR CUDA layer
+- Tesseract / pytesseract: OCR CPU fallback
+- PyTorch: EasyOCR runtime and CUDA detection
+- Pillow / OpenCV / NumPy: image handling
+- Docker Compose: CPU and CUDA deployment paths
+- COLA Cloud sample pack: training source for label images, OCR text, imported country data, and structured COLA fields
+
+COLA Cloud references in the sample pack:
+
+- Docs: https://docs.colacloud.us
+- Dashboard: https://app.colacloud.us
+- Image CDN pattern: `https://dyuie4zgfxmt6.cloudfront.net/{TTB_IMAGE_ID}.webp`

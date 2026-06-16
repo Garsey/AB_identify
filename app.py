@@ -102,7 +102,12 @@ except OCRLoadError as exc:
 
 st.markdown(
     """
-Upload label photos one at a time for the same product. Each photo may fill only some fields; values already captured stay in the form while you upload the next photo. Review or edit every value before saving. When the entry is complete enough, select **Save entry** to append all seven fields to the table.
+HOW TO:
+* Upload multiple images of the same label, one at a time.
+* Parsed values will 'stick' to the table entry form. New photos wont overwrite the entry form until you 'save' or 'clear'.
+* Continue uploading images of the initial label until happy with parsed content.
+* Make any manual edits for blank or incorrect fields.
+* When you are done with a label, hit 'save entry' to store parsed content to the backend.
 """
 )
 

@@ -56,6 +56,12 @@ def download_image(url: str, output_path: Path, overwrite: bool) -> str:
     return "downloaded"
 
 
+def country_of_origin(cola: dict[str, str]) -> str:
+    imported = (cola.get("DOMESTIC_OR_IMPORTED") or "").strip().lower() == "imported"
+    origin_name = (cola.get("ORIGIN_NAME") or "").strip()
+    return origin_name if imported else ""
+
+
 def main() -> None:
     args = parse_args()
     cola_path = args.pack / "cola.csv"
@@ -116,6 +122,7 @@ def main() -> None:
                         "volume_unit": cola.get("OCR_VOLUME_UNIT", ""),
                         "barcode_type": cola.get("BARCODE_TYPE", ""),
                         "barcode_value": cola.get("BARCODE_VALUE", ""),
+                        "country_of_origin": country_of_origin(cola),
                     },
                 }
                 manifest.write(json.dumps(record, ensure_ascii=False) + "\n")

@@ -8,7 +8,9 @@ __pycache__/
 .streamlit/secrets.toml
 
 # Local data and model artifacts can be large or private.
+archive/
 data/
+training-data/
 weights/*.pt
 weights/*.pth
 weights/*.safetensors

@@ -1,12 +1,12 @@
 # AB Identify
 
-Lightweight local prototype for OCR-driven alcohol label compliance checks.
+Lightweight local prototype for reading alcohol label images and filling a confidence-filtered parsed table.
 
-The app is designed for a hybrid workflow:
+The project uses the standard training/deployment split:
 
-1. Develop and train locally in a Python virtual environment.
-2. Save custom OCR weights to `weights/alcohol_ocr.pt`.
-3. Run the Streamlit web UI locally or inside Docker without retraining.
+1. Materialize labeled COLA sample data locally.
+2. Train/export a parser artifact from OCR text and CSV ground truth.
+3. Build Docker as an inference-only web app that reads new uploads with OCR and fills only confident table values.
 
 ## Local Setup
 
@@ -28,32 +28,41 @@ docker compose up --build
 
 Then open http://localhost:8501.
 
+The Docker image is inference-only. It installs Tesseract OCR plus the lightweight Python UI/parser dependencies, includes `weights/cola_field_parser.json`, and does not mount the full repo or training data at runtime.
+
 ## Project Layout
 
-- `app.py` - Streamlit upload UI and compliance results.
-- `ocr_engine.py` - docTR model initialization, optional custom weight loading, and OCR text extraction.
-- `compliance.py` - fuzzy text matching for expected brand and ABV values.
-- `train.py` - training/export scaffold for dataset-specific fine-tuning.
-- `weights/` - local model artifacts. Large weight files are ignored by Git.
+- `app.py` - Streamlit upload UI that OCRs a new image and fills the parsed table.
+- `ocr_engine.py` - Tesseract-based OCR for uploaded label images.
+- `field_parser.py` - trained OCR-text field parser and confidence filtering.
+- `train.py` - trains the parser from the local manifest using a 90/10 split.
+- `materialize_cola_sample.py` - downloads sample-pack image files and creates a training manifest.
+- `weights/cola_field_parser.json` - exported parser artifact used by Docker.
 
 ## Training Flow
 
-Install the full OCR/training stack after the UI is working:
+Download/materialize the sample-pack images first:
 
 ```powershell
-pip install -r requirements-ocr.txt
+python materialize_cola_sample.py
 ```
 
-Place your dataset under `data/alcohol-labels` or pass a custom path:
+Train a 90/10 split parser:
 
 ```powershell
-python train.py --dataset data/alcohol-labels --epochs 5
+python train.py --train-ratio 0.9 --seed 42 --min-confidence 0.85
 ```
 
-The training scaffold currently writes a manifest and marks the point where docTR's detection and recognition trainers should be connected to your final dataset format. Once training is wired, export the resulting checkpoint to:
+This writes:
 
 ```text
-weights/alcohol_ocr.pt
+weights/cola_field_parser.json
 ```
 
-When that file exists, `app.py` will try to load it on startup.
+Commit or package this exported artifact before building Docker. Training happens once in the development environment; Docker only loads the exported parser and serves inference.
+
+## Current Model Behavior
+
+The current app does not match uploads to training images. It reads text from the uploaded image with OCR, then fills fields only when the parser is confident. If OCR text is jumbled and only ABV or brand is clear, only those fields should appear. The raw OCR text and uploaded image remain visible so the user can manually inspect anything the parser leaves blank.
+
+The current data does not include word-level bounding boxes, so this is not yet a fine-tuned OCR detector/recognizer. It is an OCR-plus-field-parser pipeline trained from COLA CSV ground truth.

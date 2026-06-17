@@ -85,9 +85,10 @@ Users can upload multiple photos for the same product one at a time. Newly parse
 
 Country of origin is trained from imported COLA records using `ORIGIN_NAME` and also checked against recognized country names in OCR text.
 
-```markdown
-![AB_Identify web app](docs/ab_proj.jpg)
-```
+
+![Inserted Image](docs/2.webp)
+![AB_Identify web app](docs/1.jpg)
+
 
 ## Assumptions
 
